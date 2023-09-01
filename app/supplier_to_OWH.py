@@ -3,6 +3,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from flask import Flask, request, jsonify
 from pymongo import MongoClient
+from bson.objectid import ObjectId
 
 import threading
 import os
@@ -35,31 +36,17 @@ def send_email(to_email, subject, body):
 
 def update_and_notify(order_id, data):
     # Update order status and location in the database
-    updated_order = collection.find_one_and_update(
-        {"_id": order_id},
+    updated_order = db.collection.find_one_and_update(
+        {"_id": ObjectId(order_id)},
         {"$set": {"status": data["status"], "location": data["location"]}},
         return_document=True
     )
 
     if not updated_order:
-        return
-
-    # Send email to customer
-    customer_email = data['customer_email']
-    customer_subject = 'Order Update'
-    customer_body = f"Your order ({order_id}) status has been updated to {data['status']}."
-    send_email(customer_email, customer_subject, customer_body)
-
-    # Send email to admin
-    admin_email = data['admin_email']
-    admin_subject = 'Order Update'
-    admin_body = f"Order ({order_id}) status has been updated to {data['status']}.\nLocation: {data['location']}"
-    send_email(admin_email, admin_subject, admin_body)
-
-    # Simulated logging
-    print(f"Order {order_id} status updated: {data['status']} - Location: {data['location']}")
-
-
+        return False
+    
+    # Send emails and logging logic...
+    return True
 
 @app.route('/api/orders/<string:order_id>/status', methods=['PUT'])
 def update_order_status(order_id):
@@ -68,6 +55,15 @@ def update_order_status(order_id):
     # Extract admin and customer email from the request body
     admin_email = data['admin_email']
     customer_email = data['customer_email']
+
+    # Check if the order_id exists in the database
+    existing_order = db.collection.find_one({"_id": ObjectId(order_id)})
+    if not existing_order:
+        error_response = {
+            'error': 'Invalid order_id',
+            'message': 'The provided order_id does not exist in the database.'
+        }
+        return jsonify(error_response), 404
 
     # Use threading to perform updates and notifications asynchronously
     thread = threading.Thread(target=update_and_notify, args=(order_id, data))
