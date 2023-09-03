@@ -16,37 +16,53 @@ try:
     collection = db["Suppliers"]
 except Exception as e:
     error_message = f"Error connecting to the database: {str(e)}"
-    print(error_message)
+    db = None  # Define db even in case of an exception
 
 # Email configuration
 EMAIL_ADDRESS = 'nnadisamson63@gmail.com'
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 
 def send_email(to_email, subject, body):
-    msg = MIMEMultipart()
-    msg['From'] = EMAIL_ADDRESS
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain'))
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = EMAIL_ADDRESS
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
 
-    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
-        smtp.starttls()
-        smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        smtp.send_message(msg)
+        with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
+            smtp.starttls()
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            smtp.send_message(msg)
+    except Exception as e:
+        error_message = f"Error sending email: {str(e)}"
 
 def update_and_notify(order_id, data):
-    # Update order status and location in the database
-    updated_order = db.collection.find_one_and_update(
-        {"_id": ObjectId(order_id)},
-        {"$set": {"status": data["status"], "location": data["location"]}},
-        return_document=True
-    )
+    try:
+        if db is None:
+            raise Exception("Database connection error")
 
-    if not updated_order:
-        return False
-    
-    # Send emails and logging logic...
-    return True
+        # Check if the order_id exists in the database
+        existing_order = db.collection.find_one({"_id": ObjectId(order_id)})
+        if existing_order:
+            # Update order status and location in the database
+            updated_order = db.collection.update_one(
+                {"_id": ObjectId(order_id)},
+                {"$set": {"status": data["status"], "location": data["location"]}}
+            )
+
+            if updated_order.matched_count == 0:
+                return (f"Failed to update order with order_id {order_id} in the database")
+        else:
+            raise Exception(f"Order with order_id {order_id} not found in the database")
+        
+        # Send emails and logging logic...
+        # You can add your email and logging logic here
+
+        return "Order status has been successfully updated. Customer and admin notifications are in progress."
+    except Exception as e:
+        error_message = str(e)
+        raise Exception(error_message)
 
 @app.route('/api/orders/<string:order_id>/status', methods=['PUT'])
 def update_order_status(order_id):
@@ -56,22 +72,13 @@ def update_order_status(order_id):
     admin_email = data['admin_email']
     customer_email = data['customer_email']
 
-    # Check if the order_id exists in the database
-    existing_order = db.collection.find_one({"_id": ObjectId(order_id)})
-    if not existing_order:
-        error_response = {
-            'error': 'Invalid order_id',
-            'message': 'The provided order_id does not exist in the database.'
-        }
-        return jsonify(error_response), 404
+    try:
+        # Use threading to perform updates and notifications asynchronously
+        thread = threading.Thread(target=update_and_notify, args=(order_id, data))
+        thread.start()
 
-    # Use threading to perform updates and notifications asynchronously
-    thread = threading.Thread(target=update_and_notify, args=(order_id, data))
-    thread.start()
-
-    response = {
-        'message': 'Order status has been successfully updated. Customer and admin notifications are in progress.'
-    }
-
-    return jsonify(response)
+        return jsonify({'message': 'Order status has been successfully updated. Customer and admin notifications are in progress.'})
+    except Exception as e:
+        error_message = str(e)
+        return jsonify({'error': 'Internal server error', 'message': error_message}), 500
 
